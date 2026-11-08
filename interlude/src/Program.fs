@@ -20,7 +20,7 @@ let crash_and_open_text_file (message: string) : unit =
 let launch_new_instance (instance: int) : unit =
     Logging.Verbosity <- if DEV_MODE then LoggingLevel.DEBUG else LoggingLevel.INFO
 
-    Logging.LogFile <- Some(Path.Combine("Logs", sprintf "log-%s.txt" (DateTime.Today.ToString("yyyyMMdd"))))
+    Logging.LogFile <- Some(Path.Combine(get_game_folder "Logs", sprintf "log-%s.txt" (DateTime.Today.ToString("yyyyMMdd"))))
 
     if OperatingSystem.IsWindows() then
         Process.GetCurrentProcess().PriorityClass <- ProcessPriorityClass.High
@@ -50,17 +50,44 @@ let send_ipc_message (message: string) : unit =
 [<EntryPoint>]
 let main (argv: string array) : int =
     let executable_location = AppDomain.CurrentDomain.BaseDirectory
-    Directory.SetCurrentDirectory(executable_location)
+    let game_dir =
+        match Environment.GetEnvironmentVariable("INTERLUDE_PATH_OVERRIDE") with
+        | null ->
+            try
+                // Probe with a unique file so existing game files are never overwritten.
+                use probe =
+                    new FileStream(
+                        Path.Combine(executable_location, Path.GetRandomFileName()),
+                        FileMode.CreateNew,
+                        FileAccess.Write,
+                        FileShare.None,
+                        1,
+                        FileOptions.DeleteOnClose
+                    )
+                probe.WriteByte(0uy)
+                executable_location
+            with
+            | :? UnauthorizedAccessException
+            | :? IOException ->
+                let data_home =
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.Create)
+                Path.Combine(data_home, "Interlude")
+        | path -> path
+
+    Directory.CreateDirectory(game_dir) |> ignore
+    Directory.SetCurrentDirectory(game_dir)
 
     let inline detect_temp_folder () : bool =
-        executable_location.Replace("\\", "/").ToLower().Contains "appdata/local/temp"
+        executable_location.Replace("\\", "/").ToLower().Contains "appdata/local/temp" && OperatingSystem.IsWindows()
 
     let inline detect_missing_libraries () : bool =
+        let exists name = File.Exists(Path.Combine(executable_location, name))
+
         let missing_bass =
-            not(File.Exists("bass.dll")) && not(File.Exists("libbass.so")) && not(File.Exists("libbass.dylib"))
+            not(exists "bass.dll") && not(exists "libbass.so") && not(exists "libbass.dylib")
 
         let missing_bass_fx =
-            not(File.Exists("bass_fx.dll")) && not(File.Exists("libbass_fx.so")) && not(File.Exists("libbass_fx.dylib"))
+            not(exists "bass_fx.dll") && not(exists "libbass_fx.so") && not(exists "libbass_fx.dylib")
 
         missing_bass || missing_bass_fx
 
